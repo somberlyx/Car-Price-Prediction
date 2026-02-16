@@ -358,14 +358,44 @@ with right:
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
+    # ---- Currency controls (display only) ----
+    st.markdown('<div class="card-title">Currency</div>', unsafe_allow_html=True)
+
+    currency_options = {
+        "INR (₹)": {"code": "INR", "symbol": "₹", "per_inr_default": 1.0},
+        "USD ($)": {"code": "USD", "symbol": "$", "per_inr_default": 0.012},
+        "EUR (€)": {"code": "EUR", "symbol": "€", "per_inr_default": 0.011},
+        "GBP (£)": {"code": "GBP", "symbol": "£", "per_inr_default": 0.0095},
+        "AED (د.إ)": {"code": "AED", "symbol": "د.إ", "per_inr_default": 0.044},
+        "PKR (₨)": {"code": "PKR", "symbol": "₨", "per_inr_default": 3.7},
+    }
+
+    currency_label = st.selectbox("Display currency", list(currency_options.keys()), index=0)
+    currency = currency_options[currency_label]
+
+    st.caption("Exchange rate is editable (approx defaults).")
+    rate_per_inr = st.number_input(
+        f"1 INR equals how many {currency['code']}?",
+        min_value=0.000001,
+        value=float(currency["per_inr_default"]),
+        step=float(currency["per_inr_default"]) * 0.05 if currency["per_inr_default"] > 0 else 0.01,
+        format="%.6f"
+    )
+
+    # helper
+    def convert_from_inr(amount_in_inr: float) -> float:
+        return amount_in_inr * rate_per_inr
+
+    def fmt_money(amount: float) -> str:
+        return f"{currency['symbol']}{amount:,.0f}"
+
+
     predict = st.button("🔮 Get Estimate")
 
     st.markdown("<div class='small muted'>We'll also show scenario comparisons and price drivers.</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ----------------------------
 # Prediction + Results Layout
-# ----------------------------
 if predict:
     with st.spinner("Calculating your car's value..."):
         try:
@@ -385,10 +415,17 @@ if predict:
             feature_df = feature_df.reindex(columns=expected_cols, fill_value=0)
 
             predicted_log_price = model.predict(feature_df)[0]
-            predicted_price = np.expm1(predicted_log_price)
+            predicted_price_lakhs = float(np.expm1(predicted_log_price))  # model output shown as "lakhs"
+            predicted_price_inr = predicted_price_lakhs * 100000          # ✅ lakhs -> INR
 
-            lower_bound = predicted_price * 0.95
-            upper_bound = predicted_price * 1.05
+            lower_inr = predicted_price_inr * 0.95
+            upper_inr = predicted_price_inr * 1.05
+
+            # convert to chosen currency for display
+            predicted_display = convert_from_inr(predicted_price_inr)
+            lower_display = convert_from_inr(lower_inr)
+            upper_display = convert_from_inr(upper_inr)
+
 
             st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -397,10 +434,10 @@ if predict:
 
             with r1:
                 st.markdown(f"""
-                <div class="result">
-                  <div style="opacity:.95; font-weight:700;"><i class="fas fa-rupee-sign"></i> Estimated Selling Price</div>
-                  <div class="big">₹{predicted_price:,.0f}</div>
-                  <div style="opacity:.9;">Range (±5%): ₹{lower_bound:,.0f} – ₹{upper_bound:,.0f}</div>
+                <div class="big">{fmt_money(predicted_display)}</div>
+                <div style="opacity:.9;">Range (±5%): {fmt_money(lower_display)} – {fmt_money(upper_display)}</div>
+                <div class="small" style="opacity:.85; margin-top:.35rem;">
+                Note: Model output is treated as <b>lakhs</b> (×100,000 INR) before conversion.
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -445,27 +482,33 @@ if predict:
             st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
             st.markdown('<h3><i class="fas fa-chart-bar"></i> Scenario Explorer</h3>', unsafe_allow_html=True)
 
-            scenarios = {
-                'Your Car': predicted_price,
-                'If First Owner': predicted_price * 1.1 if owner != "First Owner" else predicted_price,
-                'If 5 Years Newer': predicted_price * 1.3 if car_age > 5 else predicted_price,
-                'If Lower Mileage': predicted_price * 1.08 if km_per_year > 15000 else predicted_price,
+            # scenarios computed in INR first (since your multipliers are “price logic”)
+            scenarios_inr = {
+                "Your Car": predicted_price_inr,
+                "If First Owner": predicted_price_inr * 1.1 if owner != "First Owner" else predicted_price_inr,
+                "If 5 Years Newer": predicted_price_inr * 1.3 if car_age > 5 else predicted_price_inr,
+                "If Lower Mileage": predicted_price_inr * 1.08 if km_per_year > 15000 else predicted_price_inr,
             }
+
+            # convert for chart display
+            scenarios_display = {k: convert_from_inr(v) for k, v in scenarios_inr.items()}
 
             fig = go.Figure(data=[
                 go.Bar(
-                    x=list(scenarios.keys()),
-                    y=list(scenarios.values()),
-                    text=[f"₹{v:,.0f}" for v in scenarios.values()],
+                    x=list(scenarios_display.keys()),
+                    y=list(scenarios_display.values()),
+                    text=[fmt_money(v) for v in scenarios_display.values()],
                     textposition="auto",
                 )
             ])
+
             fig.update_layout(
                 height=380,
-                yaxis_title="Price (₹)",
+                yaxis_title=f"Price ({currency['code']})",
                 showlegend=False,
                 margin=dict(l=10, r=10, t=50, b=10),
             )
+
             st.plotly_chart(fig, use_container_width=True)
 
             # Footer note
